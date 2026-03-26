@@ -392,6 +392,7 @@ To extend Tree:
 
 - LGPL-v3
 - ! AI was slightly used - *only* for help with errors that didn't *even exist on stackoverflow* = It was *lobotomized* so it **couldn't** write the actual full code !
+- Also some basic writing help AIs were used to make the docs as I suck at documentation and didn't want to do it...
 
 ---
 
