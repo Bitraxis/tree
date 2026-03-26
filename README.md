@@ -1,8 +1,17 @@
 # :tree:emoji:goes:here: - Tree and PkgTree repository
 
+## Pkgtree disclaimer!
+---
+
+- There is currently no repo or mirror, because I'm don't have the money for that
+- Contact me or make a PR if you want to do that
+  
+---
 ## Build and usage
 ---
 
+- Also most of the docs *were* run through DeepL as English is not my first language and I'm not exactly good at it!
+- Also Tree is a just for fun project by me, made so that I will understand C
 - Needs CMake and Make
 
 ---
