@@ -1,5 +1,4 @@
-# 🌲 - Tree
-
+# :tree:emoji:goes:here: - Tree and PkgTree repository
 
 ## Build and usage
 
@@ -36,19 +35,8 @@ Without pkgtree:
 ```bash
 gcc -o tree main.c -lm
 ```
-# Tree Language Parser & Interpreter
-
-A statically-typed, indentation-sensitive programming language with a C-based lexer, parser, and runtime interpreter.
 
 ## Quick Start
-
-### Build
-
-```bash
-gcc -o tree_parser main.c -lm
-```
-
-(The `-lm` flag is required to link the math library for math functions like `to_sqrt()`, `to_pow()`, `to_sin()`, etc.)
 
 ### Run
 
@@ -361,18 +349,10 @@ Check for:
 ## Building on Different Platforms
 
 ### Linux/macOS
+---
+
 ```bash
 gcc -o tree_parser main.c -lm
-```
-
-### Windows (MinGW) (experimental!) 
-```bash
-gcc -o tree_parser.exe main.c -lm
-```
-
-### Windows (MSVC) (super experimental!)
-```bash
-cl main.c /link math.lib
 ```
 
 ---
