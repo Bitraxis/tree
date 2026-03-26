@@ -159,7 +159,8 @@ int pkgtree_update(const char* name) {
     if (!file_exists("tree.pkg")) { fprintf(stderr, "[pkgtree][err] no tree.pkg\n"); return 0; }
     FILE *f = fopen("tree.pkg","r");
     if (!f) return 0;
-    char tmpfile[] = "/tmp/tree.pkg.tmpXXXXXX";
+    /* create temp file in current directory to avoid relying on /tmp */
+    char tmpfile[] = "tree.pkg.tmpXXXXXX";
     int fd = mkstemp(tmpfile);
     if (fd < 0) { fclose(f); return 0; }
     FILE *out = fdopen(fd, "w");

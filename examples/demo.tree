@@ -1,0 +1,7 @@
+# Demo: pkgtree usage
+pkgtree::init();
+pkgtree::set-repo("https://example.treepkgs.dev");
+pkgtree::add("hello","1.0");
+pkgtree::add("world","2.0");
+pkgtree::list();
+pkgtree::install();
