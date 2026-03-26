@@ -1,6 +1,7 @@
-# tree (interpreter)
+# 🌲 - Tree
 
-Build and usage
+
+## Build and usage
 
 With pkgtree runtime (default):
 
@@ -22,7 +23,7 @@ cmake --build . --config Release
 ./tree ../pkgtree/pkgtree.tree
 ```
 
-You can also compile directly with `gcc`:
+### You can also compile directly with `gcc`:
 
 With pkgtree:
 
@@ -399,7 +400,8 @@ To extend Tree:
 
 ## License
 
-Educational project. Use freely for learning purposes.
+GPL-3
+Slight use of AI was used - only for help with errors that didn't even exist on stackoverflow = It was lobotomized so it couldn't write the actual full code!
 
 ---
 
