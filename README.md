@@ -400,8 +400,8 @@ To extend Tree:
 
 ## License
 
-LGPL-v3
-Slight use of AI was used - only for help with errors that didn't even exist on stackoverflow = It was lobotomized so it couldn't write the actual full code!
+- LGPL-v3
+- ! AI was slightly used - *only* for help with errors that didn't *even exist on stackoverflow* = It was *lobotomized* so it **couldn't** write the actual full code !
 
 ---
 
