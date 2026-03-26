@@ -9,7 +9,7 @@
 #   pkgtree::list()
 #
 # Uses shell-backed downloader in runtime:
-# curl -> wget -> PowerShell fallback (provided by C runtime hooks)
+# curl -> wget -> shell fallback (provided by C runtime hooks)
 
 pkg(){
     "math";
@@ -17,7 +17,7 @@ pkg(){
 };
 
 # -------- state --------
-repo_url = "https://example.treepkgs.dev";
+repo_url = "https://example.treepkgs.dev"; # So the repo is currently only a WIP a repo or a mirror maintainer would be awesome
 manifest_path = "tree.pkg";
 lock_path = "tree.lock";
 cache_dir = ".tree/cache";
