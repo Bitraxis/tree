@@ -1,14 +1,15 @@
 # :tree:emoji:goes:here: - Tree and PkgTree repository
 
 ## Build and usage
+---
 
+- Needs CMake and Make
+
+---
 With pkgtree runtime (default):
 
 ```bash
-mkdir -p build
-cd build
-cmake -DWITH_PKGTREE=ON ..
-cmake --build . --config Release
+make
 ./tree ../pkgtree/pkgtree.tree
 ```
 
