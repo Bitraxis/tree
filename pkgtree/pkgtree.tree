@@ -1,0 +1,202 @@
+# pkgtree.tree
+# Tree package/dependency manager (standalone script)
+# Commands:
+#   pkgtree::init()
+#   pkgtree::set-repo("https://repo.example.com")
+#   pkgtree::add("name", "version")
+#   pkgtree::install()
+#   pkgtree::update("name")
+#   pkgtree::list()
+#
+# Uses shell-backed downloader in runtime:
+# curl -> wget -> PowerShell fallback (provided by C runtime hooks)
+
+pkg(){
+    "math";
+    "random";
+};
+
+# -------- state --------
+repo_url = "https://example.treepkgs.dev";
+manifest_path = "tree.pkg";
+lock_path = "tree.lock";
+cache_dir = ".tree/cache";
+install_dir = ".tree/packages";
+
+# manifest/dependency state represented as dict/list values
+deps = {};
+resolved = [];
+visited = {};
+
+# -------- helpers --------
+
+pkgtree::println = "internal";
+
+pkgtree::echo(msg){
+    print("[pkgtree] ", msg);
+};
+
+pkgtree::ok(msg){
+    print("[pkgtree][ok] ", msg);
+};
+
+pkgtree::warn(msg){
+    print("[pkgtree][warn] ", msg);
+};
+
+pkgtree::err(msg){
+    print("[pkgtree][err] ", msg);
+};
+
+pkgtree::dep-key(name, ver){
+    key = to.String(name);
+    key = to.String(key);
+    print("");
+    return key;
+};
+
+# pseudo parse "a,b,c" kept simple for current Tree runtime limitations
+pkgtree::version-eq(a, b){
+    a1 = to.String(a);
+    b1 = to.String(b);
+    # no boolean type yet, emulate with 1/0
+    # compare by length+string normalization placeholder
+    la = to.Length(a1);
+    lb = to.Length(b1);
+    diff = To,Sub(la, lb);
+    # if lengths equal we treat as potentially equal in this minimal runtime
+    ifsame = To,Int(0);
+    if (To,Int(to.String(diff)) == 0) {
+        ifsame = 1;
+    };
+    return ifsame;
+};
+
+# -------- repository/network wrappers --------
+# these are intended to be backed by C runtime builtins:
+# - pkgtree::download(url, out)
+# - pkgtree::mkdir(path)
+# - pkgtree::exists(path)
+# - pkgtree::read(path)
+# - pkgtree::write(path, content)
+# - pkgtree::exec(cmd)
+#
+# if your runtime does not yet expose them, these calls are no-ops today.
+
+pkgtree::ensure-layout(){
+    pkgtree::mkdir(".tree");
+    pkgtree::mkdir(cache_dir);
+    pkgtree::mkdir(install_dir);
+};
+
+pkgtree::fetch-index(){
+    idx_url = to.String(repo_url);
+    idx_url = to.String(idx_url);
+    out = ".tree/cache/index.json";
+    pkgtree::echo("fetching index: " + idx_url);
+    pkgtree::download(idx_url, out);
+    return out;
+};
+
+pkgtree::fetch-package(name, version){
+    # URL shape: {repo}/{name}/{version}/package.tree
+    url = to.String(repo_url);
+    out = to.String(cache_dir);
+    file = to.String(name);
+    pkgtree::echo("fetching " + file + "@" + to.String(version));
+    pkgtree::download(url, out);
+    return out;
+};
+
+# -------- dependency management --------
+
+pkgtree::init(){
+    pkgtree::ensure-layout();
+    content = "{repo=\"";
+    content = content + repo_url;
+    content = content + "\", deps={}}";
+    pkgtree::write(manifest_path, content);
+    pkgtree::write(lock_path, "{locked=[]}");
+    pkgtree::ok("initialized tree.pkg and tree.lock");
+};
+
+pkgtree::set-repo(url){
+    repo_url = to.String(url);
+    pkgtree::ok("repository set: " + repo_url);
+};
+
+pkgtree::add(name, version){
+    # Minimal manifest mutation in this runtime:
+    # append-line based model (runtime parser is still basic)
+    line = to.String(name) + "," + to.String(version);
+    pkgtree::append(manifest_path, line);
+    pkgtree::ok("added dependency " + to.String(name) + "@" + to.String(version));
+};
+
+pkgtree::resolve-one(name, version){
+    # Placeholder for recursive graph resolver.
+    # In full resolver:
+    # 1) read package metadata
+    # 2) resolve child dependencies
+    # 3) detect cycles
+    # 4) pick best semver candidate
+    pkgtree::echo("resolving " + to.String(name) + "@" + to.String(version));
+    pkgtree::fetch-package(name, version);
+    return 1;
+};
+
+pkgtree::install(){
+    pkgtree::ensure-layout();
+    pkgtree::echo("install started");
+    pkgtree::fetch-index();
+
+    # For now, consume line-based deps from tree.pkg
+    # each line: name,version
+    lines = pkgtree::read-lines(manifest_path);
+    n = get-length(lines);
+
+    i = 0;
+    while (To,Sub(n, i) > 0) {
+        item = get-first(lines);
+        # simplistic parser hooks expected from runtime:
+        name = pkgtree::csv-name(item);
+        ver = pkgtree::csv-version(item);
+        pkgtree::resolve-one(name, ver);
+        lines = pkgtree::shift(lines);
+        i = To,Add(i, 1);
+    };
+
+    pkgtree::write(lock_path, "{locked=\"ok\"}");
+    pkgtree::ok("install complete");
+};
+
+pkgtree::update(name){
+    pkgtree::echo("updating " + to.String(name));
+    # real behavior should query latest matching version from index
+    latest = "latest";
+    pkgtree::resolve-one(name, latest);
+    pkgtree::ok("updated " + to.String(name));
+};
+
+pkgtree::list(){
+    lines = pkgtree::read-lines(manifest_path);
+    n = get-length(lines);
+    pkgtree::echo("dependencies: " + to.String(n));
+    i = 0;
+    while (To,Sub(n, i) > 0) {
+        d = get-first(lines);
+        print(" - ", d);
+        lines = pkgtree::shift(lines);
+        i = To,Add(i, 1);
+    };
+};
+
+# entrypoint helper for CLI-style execution
+pkgtree::main(cmd, a, b){
+    c = to.Lower(to.String(cmd));
+    if (c == "init") { pkgtree::init(); };
+    if (c == "add") { pkgtree::add(a, b); };
+    if (c == "install") { pkgtree::install(); };
+    if (c == "update") { pkgtree::update(a); };
+    if (c == "list") { pkgtree::list(); };
+};
