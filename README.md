@@ -365,12 +365,12 @@ Check for:
 gcc -o tree_parser main.c -lm
 ```
 
-### Windows (MinGW)
+### Windows (MinGW) (experimental!) 
 ```bash
 gcc -o tree_parser.exe main.c -lm
 ```
 
-### Windows (MSVC)
+### Windows (MSVC) (super experimental!)
 ```bash
 cl main.c /link math.lib
 ```
