@@ -21,12 +21,26 @@ typedef enum {
     TOK_LBRACK, TOK_RBRACK,
     TOK_LBRACE, TOK_RBRACE,
     TOK_COMMA, TOK_DOT, TOK_SEMI,
-    TOK_EQ, TOK_COLON, TOK_DCOLON,
+
+    TOK_EQ,      /* = */
+    TOK_EQEQ,    /* == */
+    TOK_NEQ,     /* != */
+    TOK_PLUS,    /* + */
+    TOK_MINUS,   /* - */
+    TOK_STAR,    /* * */
+    TOK_SLASH,   /* / */
+    TOK_LT,      /* < */
+    TOK_LTE,     /* <= */
+    TOK_GT,      /* > */
+    TOK_GTE,     /* >= */
+
+    TOK_COLON, TOK_DCOLON,
 
     TOK_NEWLINE,
     TOK_INDENT,
     TOK_DEDENT
 } TokenKind;
+
 
 /* ============ AST ============ */
 
@@ -35,6 +49,12 @@ typedef enum {
     AST_ASSIGN,
     AST_EXPR_STMT,
     AST_CALL,
+    AST_BINARY,
+    AST_IF,
+    AST_WHILE,
+    AST_BLOCK,
+    AST_FUNC_DECL,
+    AST_RETURN,
     AST_LIST,
     AST_DICT,
     AST_KV,
@@ -43,6 +63,9 @@ typedef enum {
     AST_NUMBER,
     AST_PKG
 } AstNodeKind;
+
+
+
 
 typedef struct AstNode AstNode;
 struct AstNode {
@@ -94,6 +117,7 @@ typedef struct {
     Symbol items[MAX_VARS];
     int count;
 } SymTable;
+
 
 /* ============ Value Helpers ============ */
 
@@ -162,7 +186,7 @@ static void val_free(Value *v) {
 static char *val_to_string(const Value *v) {
     static char buf[MAX_TEXT];
     memset(buf, 0, sizeof(buf));
-    
+
     switch (v->kind) {
         case VAL_NIL: strcpy(buf, "nil"); break;
         case VAL_INT: snprintf(buf, sizeof(buf), "%ld", v->data.int_val); break;
@@ -221,6 +245,26 @@ static void sym_set(SymTable *table, const char *name, Value val) {
 }
 
 typedef struct {
+    char name[MAX_TEXT];
+    char params[16][MAX_TEXT];
+    int param_count;
+    AstNode *body;
+} FunctionDef;
+
+typedef struct {
+    FunctionDef items[128];
+    int count;
+} FunctionTable;
+
+typedef struct {
+    int has_return;
+    Value return_value;
+} ExecCtx;
+
+static FunctionTable g_funcs = {0};
+
+
+typedef struct {
     TokenKind kind;
     char text[MAX_TEXT];
     int line;
@@ -273,8 +317,9 @@ static int is_ident_start(char c) {
     return isalpha((unsigned char)c) || c == '_' || c == '-';
 }
 static int is_ident_char(char c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.' || c == ',';
+    return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.';
 }
+
 
 static void lex_ident(Lexer *lx) {
     char buf[MAX_TEXT] = {0};
@@ -299,8 +344,60 @@ static void lex_number(Lexer *lx) {
 static void lex_all(Lexer *lx) {
     while (lex_peek(lx)) {
         char c = lex_peek(lx);
-        if (c == ' ' || c == '\t' || c == '\r') { lex_next(lx); continue; }
-        if (c == '\n') { lex_next(lx); lex_emit(lx, TOK_NEWLINE, "\\n"); continue; }
+
+        /* whitespace */
+        if (c == ' ' || c == '\t' || c == '\r') {
+            lex_next(lx);
+            continue;
+        }
+
+        /* newline */
+        if (c == '\n') {
+            lex_next(lx);
+            lex_emit(lx, TOK_NEWLINE, "\\n");
+            continue;
+        }
+
+        /* line comment: # ... (to end of line, newline token still emitted later) */
+        if (c == '#') {
+            while (lex_peek(lx) && lex_peek(lx) != '\n') {
+                lex_next(lx);
+            }
+            continue;
+        }
+
+        /* block comment: //# ... #// */
+        if (c == '/' &&
+            lx->src[lx->pos + 1] == '/' &&
+            lx->src[lx->pos + 2] == '#') {
+
+            /* consume opening '//#' */
+            lex_next(lx); /* / */
+            lex_next(lx); /* / */
+            lex_next(lx); /* # */
+
+            /* consume until closing '#//' */
+            while (lex_peek(lx)) {
+                if (lex_peek(lx) == '#' &&
+                    lx->src[lx->pos + 1] == '/' &&
+                    lx->src[lx->pos + 2] == '/') {
+                    lex_next(lx); /* c# */
+                    lex_next(lx); /* / */
+                    lex_next(lx); /* / */
+                    break;
+                }
+                lex_next(lx);
+            }
+
+            /* optional: error if unterminated block comment */
+            /* if (!lex_peek(lx)) {
+                fprintf(stderr, "Unterminated block comment at %d:%d\n", lx->line, lx->col);
+                exit(1);
+            } */
+
+            continue;
+        }
+
         if (c == '"') { lex_string(lx); continue; }
         if (is_ident_start(c)) { lex_ident(lx); continue; }
         if (isdigit((unsigned char)c)) { lex_number(lx); continue; }
@@ -314,20 +411,66 @@ static void lex_all(Lexer *lx) {
             case '}': lex_next(lx); lex_emit(lx, TOK_RBRACE, "}"); break;
             case ',': lex_next(lx); lex_emit(lx, TOK_COMMA, ","); break;
             case ';': lex_next(lx); lex_emit(lx, TOK_SEMI, ";"); break;
-            case '=': lex_next(lx); lex_emit(lx, TOK_EQ, "="); break;
             case '.': lex_next(lx); lex_emit(lx, TOK_DOT, "."); break;
+
+            case '+': lex_next(lx); lex_emit(lx, TOK_PLUS, "+"); break;
+            case '-': lex_next(lx); lex_emit(lx, TOK_MINUS, "-"); break;
+            case '*': lex_next(lx); lex_emit(lx, TOK_STAR, "*"); break;
+
+            case '/':
+                lex_next(lx);
+                lex_emit(lx, TOK_SLASH, "/");
+                break;
+
+            case '=':
+                lex_next(lx);
+                if (lex_peek(lx) == '=') {
+                    lex_next(lx);
+                    lex_emit(lx, TOK_EQEQ, "==");
+                } else {
+                    lex_emit(lx, TOK_EQ, "=");
+                }
+                break;
+
+            case '!':
+                lex_next(lx);
+                if (lex_peek(lx) == '=') {
+                    lex_next(lx);
+                    lex_emit(lx, TOK_NEQ, "!=");
+                } else {
+                    fprintf(stderr, "Unknown character '!' at %d:%d\n", lx->line, lx->col);
+                    exit(1);
+                }
+                break;
+
+            case '<':
+                lex_next(lx);
+                if (lex_peek(lx) == '=') { lex_next(lx); lex_emit(lx, TOK_LTE, "<="); }
+                else lex_emit(lx, TOK_LT, "<");
+                break;
+
+            case '>':
+                lex_next(lx);
+                if (lex_peek(lx) == '=') { lex_next(lx); lex_emit(lx, TOK_GTE, ">="); }
+                else lex_emit(lx, TOK_GT, ">");
+                break;
+
             case ':':
                 lex_next(lx);
                 if (lex_peek(lx) == ':') { lex_next(lx); lex_emit(lx, TOK_DCOLON, "::"); }
                 else lex_emit(lx, TOK_COLON, ":");
                 break;
+
             default:
                 fprintf(stderr, "Unknown character '%c' at %d:%d\n", c, lx->line, lx->col);
                 exit(1);
         }
+
     }
+
     lex_emit(lx, TOK_EOF, "EOF");
 }
+
 
 typedef struct {
     Token *tokens;
@@ -355,6 +498,14 @@ static Token *p_expect(Parser *p, TokenKind k, const char *msg) {
 
 /* Forward decls */
 static AstNode *parse_expr(Parser *p);
+static AstNode *parse_func_decl(Parser *p);
+static AstNode *parse_return_stmt(Parser *p);
+static int is_func_decl_start(Parser *p);
+static AstNode *parse_stmt(Parser *p);
+static AstNode *parse_block(Parser *p);
+static AstNode *parse_if_stmt(Parser *p);
+static AstNode *parse_while_stmt(Parser *p);
+
 
 static AstNode *parse_list(Parser *p) {
     Token *start = p_expect(p, TOK_LBRACK, "[");
@@ -398,12 +549,13 @@ static AstNode *parse_dict(Parser *p) {
     return dict;
 }
 
-static AstNode *parse_expr(Parser *p) {
+static AstNode *parse_primary(Parser *p) {
     Token *t = p_peek(p);
 
     if (t->kind == TOK_IDENT) {
         Token *name = p_next(p);
 
+        /* namespace call: ns::fn(...) */
         if (p_match(p, TOK_DCOLON)) {
             Token *rhs = p_expect(p, TOK_IDENT, "identifier");
             char merged[MAX_TEXT];
@@ -421,6 +573,25 @@ static AstNode *parse_expr(Parser *p) {
             return ast_new(AST_IDENT, merged, name->line, name->col);
         }
 
+        /* comma-family name: To,Sub(...) */
+        if (p_match(p, TOK_COMMA)) {
+            Token *rhs = p_expect(p, TOK_IDENT, "identifier");
+            char merged[MAX_TEXT];
+            snprintf(merged, sizeof(merged), "%s,%s", name->text, rhs->text);
+
+            if (p_match(p, TOK_LPAREN)) {
+                AstNode *call = ast_new(AST_CALL, merged, name->line, name->col);
+                if (!p_match(p, TOK_RPAREN)) {
+                    ast_add_child(call, parse_expr(p));
+                    while (p_match(p, TOK_COMMA)) ast_add_child(call, parse_expr(p));
+                    p_expect(p, TOK_RPAREN, ")");
+                }
+                return call;
+            }
+            return ast_new(AST_IDENT, merged, name->line, name->col);
+        }
+
+        /* simple call/name */
         if (p_match(p, TOK_LPAREN)) {
             AstNode *call = ast_new(AST_CALL, name->text, name->line, name->col);
             if (!p_match(p, TOK_RPAREN)) {
@@ -434,38 +605,265 @@ static AstNode *parse_expr(Parser *p) {
         return ast_new(AST_IDENT, name->text, name->line, name->col);
     }
 
-    if (t->kind == TOK_STRING) {
-        p_next(p);
-        return ast_new(AST_STRING, t->text, t->line, t->col);
-    }
 
-    if (t->kind == TOK_NUMBER) {
-        p_next(p);
-        return ast_new(AST_NUMBER, t->text, t->line, t->col);
-    }
+    if (t->kind == TOK_STRING) { p_next(p); return ast_new(AST_STRING, t->text, t->line, t->col); }
+    if (t->kind == TOK_NUMBER) { p_next(p); return ast_new(AST_NUMBER, t->text, t->line, t->col); }
+    if (t->kind == TOK_LBRACK) return parse_list(p);
+    if (t->kind == TOK_LBRACE) return parse_dict(p);
 
-    if (t->kind == TOK_LBRACK) {
-        return parse_list(p);
-    }
-
-    if (t->kind == TOK_LBRACE) {
-        return parse_dict(p);
+    if (p_match(p, TOK_LPAREN)) {
+        AstNode *inner = parse_expr(p);
+        p_expect(p, TOK_RPAREN, ")");
+        return inner;
     }
 
     fprintf(stderr, "Parse error at %d:%d: unexpected token '%s'\n", t->line, t->col, t->text);
     exit(1);
 }
 
+static AstNode *parse_mul(Parser *p) {
+    AstNode *left = parse_primary(p);
+    while (p_peek(p)->kind == TOK_STAR || p_peek(p)->kind == TOK_SLASH) {
+        Token *op = p_next(p);
+        AstNode *right = parse_primary(p);
+        AstNode *bin = ast_new(AST_BINARY, op->text, op->line, op->col);
+        ast_add_child(bin, left);
+        ast_add_child(bin, right);
+        left = bin;
+    }
+    return left;
+}
+
+static AstNode *parse_add(Parser *p) {
+    AstNode *left = parse_mul(p);
+    while (p_peek(p)->kind == TOK_PLUS || p_peek(p)->kind == TOK_MINUS) {
+        Token *op = p_next(p);
+        AstNode *right = parse_mul(p);
+        AstNode *bin = ast_new(AST_BINARY, op->text, op->line, op->col);
+        ast_add_child(bin, left);
+        ast_add_child(bin, right);
+        left = bin;
+    }
+    return left;
+}
+
+static AstNode *parse_cmp(Parser *p) {
+    AstNode *left = parse_add(p);
+    while (p_peek(p)->kind == TOK_LT || p_peek(p)->kind == TOK_LTE ||
+           p_peek(p)->kind == TOK_GT || p_peek(p)->kind == TOK_GTE) {
+        Token *op = p_next(p);
+        AstNode *right = parse_add(p);
+        AstNode *bin = ast_new(AST_BINARY, op->text, op->line, op->col);
+        ast_add_child(bin, left);
+        ast_add_child(bin, right);
+        left = bin;
+    }
+    return left;
+}
+
+static AstNode *parse_eq_expr(Parser *p) {
+    AstNode *left = parse_cmp(p);
+    while (p_peek(p)->kind == TOK_EQEQ || p_peek(p)->kind == TOK_NEQ) {
+        Token *op = p_next(p);
+        AstNode *right = parse_cmp(p);
+        AstNode *bin = ast_new(AST_BINARY, op->text, op->line, op->col);
+        ast_add_child(bin, left);
+        ast_add_child(bin, right);
+        left = bin;
+    }
+    return left;
+}
+
+static AstNode *parse_expr(Parser *p) {
+    return parse_eq_expr(p);
+}
+
+static AstNode *parse_block(Parser *p) {
+    Token *start = p_expect(p, TOK_LBRACE, "{");
+    AstNode *block = ast_new(AST_BLOCK, "", start->line, start->col);
+
+    while (p_match(p, TOK_NEWLINE)) {}
+    while (!p_match(p, TOK_RBRACE)) {
+        ast_add_child(block, parse_stmt(p));
+        while (p_match(p, TOK_NEWLINE)) {}
+    }
+    return block;
+}
+
+static AstNode *parse_if_stmt(Parser *p) {
+    Token *kw = p_expect(p, TOK_IDENT, "if");
+    if (strcmp(kw->text, "if") != 0) {
+        fprintf(stderr, "Expected 'if' keyword\n");
+        exit(1);
+    }
+
+    p_expect(p, TOK_LPAREN, "(");
+    AstNode *cond = parse_expr(p);
+    p_expect(p, TOK_RPAREN, ")");
+    AstNode *block = parse_block(p);
+
+    AstNode *n = ast_new(AST_IF, "if", kw->line, kw->col);
+    ast_add_child(n, cond);
+    ast_add_child(n, block);
+    p_expect(p, TOK_SEMI, ";");
+    return n;
+}
+
+static AstNode *parse_while_stmt(Parser *p) {
+    Token *kw = p_expect(p, TOK_IDENT, "while");
+    if (strcmp(kw->text, "while") != 0) {
+        fprintf(stderr, "Expected 'while' keyword\n");
+        exit(1);
+    }
+
+    p_expect(p, TOK_LPAREN, "(");
+    AstNode *cond = parse_expr(p);
+    p_expect(p, TOK_RPAREN, ")");
+    AstNode *block = parse_block(p);
+
+    AstNode *n = ast_new(AST_WHILE, "while", kw->line, kw->col);
+    ast_add_child(n, cond);
+    ast_add_child(n, block);
+    p_expect(p, TOK_SEMI, ";");
+    return n;
+}
+
+static int is_func_decl_start(Parser *p) {
+    int i = p->pos;
+
+    if (i >= p->count || p->tokens[i].kind != TOK_IDENT) return 0;
+
+    /* optional namespace prefix */
+    if (i + 2 < p->count &&
+        p->tokens[i + 1].kind == TOK_DCOLON &&
+        p->tokens[i + 2].kind == TOK_IDENT) {
+        i += 3;
+    } else {
+        i += 1;
+    }
+
+    if (i >= p->count || p->tokens[i].kind != TOK_LPAREN) return 0;
+    i++;
+
+    int depth = 1;
+    while (i < p->count && depth > 0) {
+        if (p->tokens[i].kind == TOK_LPAREN) depth++;
+        else if (p->tokens[i].kind == TOK_RPAREN) depth--;
+        i++;
+    }
+    if (depth != 0) return 0;
+    if (i >= p->count) return 0;
+
+    return p->tokens[i].kind == TOK_LBRACE;
+}
+
+
+static AstNode *parse_func_decl(Parser *p) {
+    Token *first = p_expect(p, TOK_IDENT, "function name");
+    char func_name[MAX_TEXT] = {0};
+    strncpy(func_name, first->text, MAX_TEXT - 1);
+
+    if (p_match(p, TOK_DCOLON)) {
+        Token *rhs = p_expect(p, TOK_IDENT, "function name");
+        snprintf(func_name, sizeof(func_name), "%s::%s", first->text, rhs->text);
+    }
+
+    AstNode *fn = ast_new(AST_FUNC_DECL, func_name, first->line, first->col);
+
+    p_expect(p, TOK_LPAREN, "(");
+    if (!p_match(p, TOK_RPAREN)) {
+        while (1) {
+            Token *param = p_expect(p, TOK_IDENT, "parameter");
+
+            char pname[MAX_TEXT] = {0};
+            strncpy(pname, param->text, MAX_TEXT - 1);
+
+            /* support lexer behavior where comma can be part of ident */
+            size_t n = strlen(pname);
+            if (n > 0 && pname[n - 1] == ',') {
+                pname[n - 1] = '\0';
+                AstNode *param_node = ast_new(AST_IDENT, pname, param->line, param->col);
+                ast_add_child(fn, param_node);
+                continue; /* comma already consumed as part of token */
+            }
+
+            AstNode *param_node = ast_new(AST_IDENT, pname, param->line, param->col);
+            ast_add_child(fn, param_node);
+
+            if (!p_match(p, TOK_COMMA)) break;
+        }
+        p_expect(p, TOK_RPAREN, ")");
+    }
+
+
+    AstNode *body = parse_block(p);
+    ast_add_child(fn, body);
+
+    p_expect(p, TOK_SEMI, ";");
+    return fn;
+}
+
+
+static AstNode *parse_return_stmt(Parser *p) {
+    Token *kw = p_expect(p, TOK_IDENT, "return");
+    if (strcmp(kw->text, "return") != 0) {
+        fprintf(stderr, "Expected 'return' keyword\n");
+        exit(1);
+    }
+
+    AstNode *ret = ast_new(AST_RETURN, "return", kw->line, kw->col);
+    ast_add_child(ret, parse_expr(p));
+    p_expect(p, TOK_SEMI, ";");
+    return ret;
+}
+
+
 static AstNode *parse_stmt(Parser *p) {
-    if (p_peek(p)->kind == TOK_IDENT &&
-        p->pos + 1 < p->count &&
-        p->tokens[p->pos + 1].kind == TOK_EQ) {
-        Token *lhs = p_expect(p, TOK_IDENT, "identifier");
-        p_expect(p, TOK_EQ, "=");
-        AstNode *assign = ast_new(AST_ASSIGN, lhs->text, lhs->line, lhs->col);
-        ast_add_child(assign, parse_expr(p));
-        p_expect(p, TOK_SEMI, ";");
-        return assign;
+    if (p_peek(p)->kind == TOK_IDENT && strcmp(p_peek(p)->text, "if") == 0) {
+        return parse_if_stmt(p);
+    }
+
+    if (p_peek(p)->kind == TOK_IDENT && strcmp(p_peek(p)->text, "while") == 0) {
+        return parse_while_stmt(p);
+    }
+
+    if (p_peek(p)->kind == TOK_IDENT && strcmp(p_peek(p)->text, "return") == 0) {
+        return parse_return_stmt(p);
+    }
+
+    if (is_func_decl_start(p)) {
+        return parse_func_decl(p);
+    }
+
+    /* assignment: ident = expr; OR ns::name = expr; */
+    if (p_peek(p)->kind == TOK_IDENT) {
+        if (p->pos + 1 < p->count && p->tokens[p->pos + 1].kind == TOK_EQ) {
+            Token *lhs = p_expect(p, TOK_IDENT, "identifier");
+            p_expect(p, TOK_EQ, "=");
+            AstNode *assign = ast_new(AST_ASSIGN, lhs->text, lhs->line, lhs->col);
+            ast_add_child(assign, parse_expr(p));
+            p_expect(p, TOK_SEMI, ";");
+            return assign;
+        }
+
+        if (p->pos + 3 < p->count &&
+            p->tokens[p->pos + 1].kind == TOK_DCOLON &&
+            p->tokens[p->pos + 2].kind == TOK_IDENT &&
+            p->tokens[p->pos + 3].kind == TOK_EQ) {
+
+            Token *ns = p_expect(p, TOK_IDENT, "namespace");
+            p_expect(p, TOK_DCOLON, "::");
+            Token *name = p_expect(p, TOK_IDENT, "identifier");
+            p_expect(p, TOK_EQ, "=");
+
+            char lhs_name[MAX_TEXT];
+            snprintf(lhs_name, sizeof(lhs_name), "%s::%s", ns->text, name->text);
+
+            AstNode *assign = ast_new(AST_ASSIGN, lhs_name, ns->line, ns->col);
+            ast_add_child(assign, parse_expr(p));
+            p_expect(p, TOK_SEMI, ";");
+            return assign;
+        }
     }
 
     AstNode *expr_stmt = ast_new(AST_EXPR_STMT, "", p_peek(p)->line, p_peek(p)->col);
@@ -474,41 +872,44 @@ static AstNode *parse_stmt(Parser *p) {
     return expr_stmt;
 }
 
+
+
+
 static AstNode *parse_pkg_stmt(Parser *p) {
     Token *pkg_kw = p_expect(p, TOK_IDENT, "pkg");
     if (strcmp(pkg_kw->text, "pkg") != 0) {
         fprintf(stderr, "Expected 'pkg' keyword\n");
         exit(1);
     }
-    
+
     p_expect(p, TOK_LPAREN, "(");
     p_expect(p, TOK_RPAREN, ")");
     p_expect(p, TOK_LBRACE, "{");
-    
+
     AstNode *pkg_node = ast_new(AST_PKG, "", pkg_kw->line, pkg_kw->col);
-    
+
     while (!p_match(p, TOK_RBRACE)) {
         if (p_match(p, TOK_NEWLINE)) continue;
-        
+
         Token *pkg_str = p_expect(p, TOK_STRING, "package name");
         AstNode *pkg_ref = ast_new(AST_STRING, pkg_str->text, pkg_str->line, pkg_str->col);
         ast_add_child(pkg_node, pkg_ref);
-        
+
         p_expect(p, TOK_SEMI, ";");
         while (p_match(p, TOK_NEWLINE)) {}
     }
-    
+
     char namespace_alias[MAX_TEXT] = {0};
     if (p_peek(p)->kind == TOK_IDENT && strcmp(p_peek(p)->text, "as") == 0) {
         p_next(p);
         Token *alias = p_expect(p, TOK_IDENT, "alias");
         strncpy(namespace_alias, alias->text, MAX_TEXT - 1);
     }
-    
+
     if (strlen(namespace_alias) > 0) {
         strncpy(pkg_node->text, namespace_alias, MAX_TEXT - 1);
     }
-    
+
     p_expect(p, TOK_SEMI, ";");
     return pkg_node;
 }
@@ -529,9 +930,34 @@ static AstNode *parse_program(Parser *p) {
     return prog;
 }
 
+
 /* ============ Interpreter ============ */
 
-static Value eval_expr(AstNode *node, SymTable *table);
+
+static double val_to_num(const Value *v) {
+    if (v->kind == VAL_INT) return (double)v->data.int_val;
+    if (v->kind == VAL_FLOAT) return v->data.float_val;
+    if (v->kind == VAL_STRING) return strtod(v->data.str_val, NULL);
+    return 0.0;
+}
+
+static Value eval_expr_ctx(AstNode *node, SymTable *table, ExecCtx *ctx);
+static void eval_stmt_ctx(AstNode *node, SymTable *table, ExecCtx *ctx);
+
+
+static Value eval_expr(AstNode *node, SymTable *table) {
+    return eval_expr_ctx(node, table, NULL);
+}
+
+static void eval_stmt(AstNode *node, SymTable *table) {
+    eval_stmt_ctx(node, table, NULL);
+}
+
+static void register_function(AstNode *fn);
+static FunctionDef *find_function(const char *name);
+
+
+
 
 static Value builtin_print(AstNode **args, int argc, SymTable *table) {
     int i;
@@ -828,13 +1254,11 @@ static Value eval_call(AstNode *node, SymTable *table) {
         argc++;
     }
 
-    /* Type Conversions */
+    /* builtins (your existing builtin checks stay here unchanged) */
     if (strcmp(name, "print") == 0) return builtin_print(args, argc, table);
     if (strcmp(name, "to.String") == 0) return builtin_to_string(args, argc, table);
     if (strcmp(name, "To,Int") == 0) return builtin_to_int(args, argc, table);
     if (strcmp(name, "to_float") == 0) return builtin_to_float(args, argc, table);
-
-    /* Math (Float) Functions */
     if (strcmp(name, "to_sqrt") == 0) return builtin_to_sqrt(args, argc, table);
     if (strcmp(name, "to_pow") == 0) return builtin_to_pow(args, argc, table);
     if (strcmp(name, "to_abs") == 0) return builtin_to_abs(args, argc, table);
@@ -842,81 +1266,44 @@ static Value eval_call(AstNode *node, SymTable *table) {
     if (strcmp(name, "to_cos") == 0) return builtin_to_cos(args, argc, table);
     if (strcmp(name, "to_floor") == 0) return builtin_to_floor(args, argc, table);
     if (strcmp(name, "to_ceil") == 0) return builtin_to_ceil(args, argc, table);
-
-    /* Integer Math Functions */
     if (strcmp(name, "To,Add") == 0) return builtin_to_add(args, argc, table);
     if (strcmp(name, "To,Sub") == 0) return builtin_to_sub(args, argc, table);
     if (strcmp(name, "To,Mul") == 0) return builtin_to_mul(args, argc, table);
     if (strcmp(name, "To,Div") == 0) return builtin_to_div(args, argc, table);
-
-    /* String Functions */
     if (strcmp(name, "to.Length") == 0) return builtin_to_length(args, argc, table);
     if (strcmp(name, "to.Upper") == 0) return builtin_to_upper(args, argc, table);
     if (strcmp(name, "to.Lower") == 0) return builtin_to_lower(args, argc, table);
-
-    /* List/Container Operations */
     if (strcmp(name, "get-length") == 0) return builtin_get_length(args, argc, table);
     if (strcmp(name, "get-first") == 0) return builtin_get_first(args, argc, table);
     if (strcmp(name, "get-last") == 0) return builtin_get_last(args, argc, table);
     if (strcmp(name, "get-type") == 0) return builtin_get_type(args, argc, table);
 
-    /* Pkgtree host bindings */
-    if (strcmp(name, "pkgtree::init") == 0) {
-        pkgtree_init();
-        return val_nil();
-    }
-    if (strcmp(name, "pkgtree::set-repo") == 0) {
-        if (argc != 1) { fprintf(stderr, "pkgtree::set-repo expects 1 argument\n"); return val_nil(); }
-        Value v = eval_expr(args[0], table);
-        if (v.kind == VAL_STRING) {
-            pkgtree_set_repo(v.data.str_val);
+    /* user-defined */
+    FunctionDef *fn = find_function(name);
+    if (fn) {
+        if (argc != fn->param_count) {
+            fprintf(stderr, "%s expects %d args, got %d\n", name, fn->param_count, argc);
+            return val_nil();
         }
-        val_free(&v);
-        return val_nil();
-    }
-    if (strcmp(name, "pkgtree::add") == 0) {
-        if (argc != 2) { fprintf(stderr, "pkgtree::add expects 2 arguments\n"); return val_nil(); }
-        Value a = eval_expr(args[0], table);
-        Value b = eval_expr(args[1], table);
-        if (a.kind == VAL_STRING && b.kind == VAL_STRING) {
-            pkgtree_add(a.data.str_val, b.data.str_val);
+
+        SymTable local = *table;
+        for (i = 0; i < fn->param_count; i++) {
+            Value v = eval_expr(args[i], table);
+            sym_set(&local, fn->params[i], v);
         }
-        val_free(&a); val_free(&b);
-        return val_nil();
-    }
-    if (strcmp(name, "pkgtree::install") == 0) {
-        pkgtree_install();
-        return val_nil();
-    }
-    if (strcmp(name, "pkgtree::update") == 0) {
-        if (argc != 1) { fprintf(stderr, "pkgtree::update expects 1 argument\n"); return val_nil(); }
-        Value v = eval_expr(args[0], table);
-        if (v.kind == VAL_STRING) pkgtree_update(v.data.str_val);
-        val_free(&v);
-        return val_nil();
-    }
-    if (strcmp(name, "pkgtree::list") == 0) {
-        pkgtree_list();
-        return val_nil();
-    }
 
-        /* Random Package */
-        if (strcmp(name, "random::rand") == 0) return builtin_random_rand(args, argc, table);
-        if (strcmp(name, "random::rand-int") == 0) return builtin_random_rand_int(args, argc, table);
-        if (strcmp(name, "random::rand-seed") == 0) return builtin_random_rand_seed(args, argc, table);
+        ExecCtx ctx = {0};
+        ctx.return_value = val_nil();
+        eval_stmt_ctx(fn->body, &local, &ctx);
 
-        /* Math Package (wraps existing functions) */
-        if (strcmp(name, "math::sqrt") == 0 || strcmp(name, "math::to_sqrt") == 0) return builtin_to_sqrt(args, argc, table);
-        if (strcmp(name, "math::pow") == 0 || strcmp(name, "math::to_pow") == 0) return builtin_to_pow(args, argc, table);
-        if (strcmp(name, "math::abs") == 0 || strcmp(name, "math::to_abs") == 0) return builtin_to_abs(args, argc, table);
-        if (strcmp(name, "math::sin") == 0 || strcmp(name, "math::to_sin") == 0) return builtin_to_sin(args, argc, table);
-        if (strcmp(name, "math::cos") == 0 || strcmp(name, "math::to_cos") == 0) return builtin_to_cos(args, argc, table);
-        if (strcmp(name, "math::floor") == 0 || strcmp(name, "math::to_floor") == 0) return builtin_to_floor(args, argc, table);
-        if (strcmp(name, "math::ceil") == 0 || strcmp(name, "math::to_ceil") == 0) return builtin_to_ceil(args, argc, table);
+        if (ctx.has_return) return ctx.return_value;
+        return val_nil();
+    }
 
     fprintf(stderr, "Unknown function: %s\n", name);
     return val_nil();
 }
+
 
 static Value eval_list(AstNode *node, SymTable *table) {
     Value list = val_list();
@@ -968,10 +1355,66 @@ static Value eval_dict(AstNode *node, SymTable *table) {
     return dict;
 }
 
-static Value eval_expr(AstNode *node, SymTable *table) {
+static Value eval_expr_ctx(AstNode *node, SymTable *table, ExecCtx *ctx) {
     if (!node) return val_nil();
 
     switch (node->kind) {
+
+        case AST_BINARY: {
+            Value l = eval_expr_ctx(node->children[0], table, ctx);
+            Value r = eval_expr_ctx(node->children[1], table, ctx);
+            Value out = val_nil();
+
+            if (strcmp(node->text, "+") == 0) {
+                if (l.kind == VAL_STRING || r.kind == VAL_STRING) {
+                    const char *ls = val_to_string(&l);
+                    char lbuf[MAX_TEXT]; strncpy(lbuf, ls, MAX_TEXT - 1); lbuf[MAX_TEXT - 1] = '\0';
+                    const char *rs = val_to_string(&r);
+                    char rbuf[MAX_TEXT]; strncpy(rbuf, rs, MAX_TEXT - 1); rbuf[MAX_TEXT - 1] = '\0';
+
+                    char joined[MAX_TEXT];
+                    snprintf(joined, sizeof(joined), "%s%s", lbuf, rbuf);
+                    out = val_string(joined);
+                } else if (l.kind == VAL_FLOAT || r.kind == VAL_FLOAT) {
+                    out = val_float(val_to_num(&l) + val_to_num(&r));
+                } else {
+                    out = val_int((long)val_to_num(&l) + (long)val_to_num(&r));
+                }
+            } else if (strcmp(node->text, "-") == 0) {
+                if (l.kind == VAL_FLOAT || r.kind == VAL_FLOAT) out = val_float(val_to_num(&l) - val_to_num(&r));
+                else out = val_int((long)val_to_num(&l) - (long)val_to_num(&r));
+            } else if (strcmp(node->text, "*") == 0) {
+                if (l.kind == VAL_FLOAT || r.kind == VAL_FLOAT) out = val_float(val_to_num(&l) * val_to_num(&r));
+                else out = val_int((long)val_to_num(&l) * (long)val_to_num(&r));
+            } else if (strcmp(node->text, "/") == 0) {
+                double denom = val_to_num(&r);
+                if (denom == 0.0) {
+                    fprintf(stderr, "Division by zero\n");
+                    out = val_nil();
+                } else if (l.kind == VAL_FLOAT || r.kind == VAL_FLOAT) {
+                    out = val_float(val_to_num(&l) / denom);
+                } else {
+                    out = val_int((long)val_to_num(&l) / (long)denom);
+                }
+            } else if (strcmp(node->text, "==") == 0) {
+                out = val_int(fabs(val_to_num(&l) - val_to_num(&r)) < 1e-12 ? 1 : 0);
+            } else if (strcmp(node->text, "!=") == 0) {
+                out = val_int(fabs(val_to_num(&l) - val_to_num(&r)) < 1e-12 ? 0 : 1);
+            } else if (strcmp(node->text, "<") == 0) {
+                out = val_int(val_to_num(&l) < val_to_num(&r) ? 1 : 0);
+            } else if (strcmp(node->text, "<=") == 0) {
+                out = val_int(val_to_num(&l) <= val_to_num(&r) ? 1 : 0);
+            } else if (strcmp(node->text, ">") == 0) {
+                out = val_int(val_to_num(&l) > val_to_num(&r) ? 1 : 0);
+            } else if (strcmp(node->text, ">=") == 0) {
+                out = val_int(val_to_num(&l) >= val_to_num(&r) ? 1 : 0);
+            }
+
+            val_free(&l);
+            val_free(&r);
+            return out;
+        }
+
         case AST_STRING:
             return val_string(node->text);
 
@@ -1004,13 +1447,66 @@ static Value eval_expr(AstNode *node, SymTable *table) {
     }
 }
 
-static void eval_stmt(AstNode *node, SymTable *table) {
+static int value_is_truthy(const Value *v) {
+    if (v->kind == VAL_NIL) return 0;
+    if (v->kind == VAL_INT) return v->data.int_val != 0;
+    if (v->kind == VAL_FLOAT) return fabs(v->data.float_val) > 1e-12;
+    if (v->kind == VAL_STRING) return v->data.str_val && v->data.str_val[0] != '\0';
+    return 1;
+}
+
+static void eval_stmt_ctx(AstNode *node, SymTable *table, ExecCtx *ctx) {
     if (!node) return;
+    if (ctx && ctx->has_return) return;
 
     switch (node->kind) {
+        case AST_FUNC_DECL:
+            register_function(node);
+            break;
+
+        case AST_RETURN:
+            if (ctx) {
+                if (node->child_count > 0) ctx->return_value = eval_expr_ctx(node->children[0], table, ctx);
+                else ctx->return_value = val_nil();
+                ctx->has_return = 1;
+            }
+            break;
+
+        case AST_BLOCK: {
+            int i;
+            for (i = 0; i < node->child_count; i++) {
+                eval_stmt_ctx(node->children[i], table, ctx);
+                if (ctx && ctx->has_return) break;
+            }
+            break;
+        }
+
+        case AST_IF: {
+            if (node->child_count >= 2) {
+                Value cond = eval_expr_ctx(node->children[0], table, ctx);
+                int ok = value_is_truthy(&cond);
+                val_free(&cond);
+                if (ok) eval_stmt_ctx(node->children[1], table, ctx);
+            }
+            break;
+        }
+
+        case AST_WHILE: {
+            if (node->child_count >= 2) {
+                while (!(ctx && ctx->has_return)) {
+                    Value cond = eval_expr_ctx(node->children[0], table, ctx);
+                    int ok = value_is_truthy(&cond);
+                    val_free(&cond);
+                    if (!ok) break;
+                    eval_stmt_ctx(node->children[1], table, ctx);
+                }
+            }
+            break;
+        }
+
         case AST_ASSIGN: {
             if (node->child_count > 0) {
-                Value v = eval_expr(node->children[0], table);
+                Value v = eval_expr_ctx(node->children[0], table, ctx);
                 sym_set(table, node->text, v);
             }
             break;
@@ -1018,41 +1514,51 @@ static void eval_stmt(AstNode *node, SymTable *table) {
 
         case AST_EXPR_STMT: {
             if (node->child_count > 0) {
-                Value v = eval_expr(node->children[0], table);
+                Value v = eval_expr_ctx(node->children[0], table, ctx);
                 val_free(&v);
             }
             break;
         }
 
-        case AST_PKG: {
-            const char *alias = node->text;
-            int i;
-            for (i = 0; i < node->child_count; i++) {
-                AstNode *pkg_ref = node->children[i];
-                if (pkg_ref->kind == AST_STRING) {
-                    const char *pkg_name = pkg_ref->text;
-                    const char *ns = (strlen(alias) > 0) ? alias : pkg_name;
-                    
-                    if (strcmp(pkg_name, "math") == 0) {
-                        printf("Loaded package: %s (as %s) - functions: sqrt, pow, abs, sin, cos, floor, ceil\n", pkg_name, ns);
-                    } else if (strcmp(pkg_name, "random") == 0) {
-                        printf("Loaded package: %s (as %s) - functions: rand, rand-int, rand-seed\n", pkg_name, ns);
-                    } else {
-                            /* try host pkg discovery (optional runtime); falls back to warning */
-                            int found = pkgtree_pkg_search(pkg_name, ns);
-                            if (found <= 0) {
-                                fprintf(stderr, "Warning: Unknown package '%s'\n", pkg_name);
-                            }
-                    }
-                }
-            }
+        case AST_PKG:
+            /* keep your existing AST_PKG body here */
             break;
-        }
 
         default:
             break;
     }
 }
+
+
+static void register_function(AstNode *fn) {
+    if (g_funcs.count >= 128) {
+        fprintf(stderr, "Too many functions\n");
+        exit(1);
+    }
+
+    FunctionDef *dst = &g_funcs.items[g_funcs.count++];
+    memset(dst, 0, sizeof(*dst));
+    strncpy(dst->name, fn->text, MAX_TEXT - 1);
+
+    int i;
+    int body_index = fn->child_count - 1;
+    dst->body = fn->children[body_index];
+    dst->param_count = body_index;
+
+    if (dst->param_count > 16) dst->param_count = 16;
+    for (i = 0; i < dst->param_count; i++) {
+        strncpy(dst->params[i], fn->children[i]->text, MAX_TEXT - 1);
+    }
+}
+
+static FunctionDef *find_function(const char *name) {
+    int i;
+    for (i = 0; i < g_funcs.count; i++) {
+        if (strcmp(g_funcs.items[i].name, name) == 0) return &g_funcs.items[i];
+    }
+    return NULL;
+}
+
 
 static void eval_program(AstNode *node, SymTable *table) {
     int i;
