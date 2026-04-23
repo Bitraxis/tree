@@ -1,0 +1,9 @@
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/tree.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/package.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/package_source.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/edit_cache.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/rebuild_cache.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/list_install_components.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/install.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/install/local.dir
+/mnt/c/Users/Veronika/Downloads/Domco/tree/build-wsl/CMakeFiles/install/strip.dir

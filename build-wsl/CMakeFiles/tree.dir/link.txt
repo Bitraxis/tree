@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG CMakeFiles/tree.dir/main.c.o CMakeFiles/tree.dir/pkgtree_runtime.c.o -o tree  -lm 
