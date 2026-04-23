@@ -12,3 +12,4 @@ build/
 cmake_build/
 build-linux/
 build-wsl/
+build-linux-debug/
