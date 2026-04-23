@@ -1,19 +1,22 @@
-CC := gcc
-CFLAGS := -O2 -Wall
+CMAKE ?= cmake
+REPO_DIR := /mnt/c/Users/Veronika/Downloads/Domco/tree
 
-.PHONY: all clean package
+.PHONY: all clean linux wsl package
 
-all:
-	@mkdir -p build
-	cmake -S . -B build -DWITH_PKGTREE=ON
-	cmake --build build --config Release
+all: linux
+
+linux:
+	@mkdir -p build-linux
+	$(CMAKE) -S . -B build-linux -DWITH_PKGTREE=ON
+	$(CMAKE) --build build-linux --config Release
+
+wsl:
+	wsl bash -lc 'cd $(REPO_DIR) && cmake -S . -B build-wsl -DWITH_PKGTREE=ON && cmake --build build-wsl --config Release'
+
+package: linux
+	$(CMAKE) --build build-linux --config Release --target package
 
 clean:
-	-rm -rf build
+	-rm -rf build build-linux build-wsl
 	-rm -rf .tree
-	-rm -f tree
-
-package:
-	@mkdir -p build
-	cmake -S . -B build -DWITH_PKGTREE=ON
-	cmake --build build --config Release --target package
+	-rm -f tree tree.exe

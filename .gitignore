@@ -10,3 +10,5 @@ tree
 # CMake build directory
 build/
 cmake_build/
+build-linux/
+build-wsl/

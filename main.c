@@ -140,6 +140,32 @@ static Value val_float(double d) {
     v.data.float_val = d;
     return v;
 }
+static void copy_text(char *dst, size_t size, const char *src) {
+    size_t n;
+
+    if (!dst || size == 0) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    n = strlen(src);
+    if (n >= size) n = size - 1;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+static char *join_text2(const char *a, const char *sep, const char *b) {
+    size_t len_a = a ? strlen(a) : 0;
+    size_t len_sep = sep ? strlen(sep) : 0;
+    size_t len_b = b ? strlen(b) : 0;
+    char *out = (char *)malloc(len_a + len_sep + len_b + 1);
+    if (!out) return NULL;
+    if (a) memcpy(out, a, len_a);
+    if (sep) memcpy(out + len_a, sep, len_sep);
+    if (b) memcpy(out + len_a + len_sep, b, len_b);
+    out[len_a + len_sep + len_b] = '\0';
+    return out;
+}
 
 static Value val_string(const char *s) {
     Value v = {0};
@@ -205,7 +231,7 @@ static AstNode *ast_new(AstNodeKind kind, const char *text, int line, int col) {
     n->kind = kind;
     n->line = line;
     n->col = col;
-    if (text) strncpy(n->text, text, MAX_TEXT - 1);
+    if (text) copy_text(n->text, sizeof(n->text), text);
     n->child_count = 0;
     return n;
 }
@@ -238,7 +264,7 @@ static void sym_set(SymTable *table, const char *name, Value val) {
         }
     }
     if (table->count < MAX_VARS) {
-        strncpy(table->items[table->count].name, name, MAX_TEXT - 1);
+        copy_text(table->items[table->count].name, sizeof(table->items[table->count].name), name);
         table->items[table->count].val = val;
         table->count++;
     }
@@ -287,8 +313,7 @@ static void lex_emit(Lexer *lx, TokenKind kind, const char *text) {
     }
     Token *t = &lx->tokens[lx->count++];
     t->kind = kind;
-    strncpy(t->text, text ? text : "", MAX_TEXT - 1);
-    t->text[MAX_TEXT - 1] = '\0';
+    copy_text(t->text, sizeof(t->text), text ? text : "");
     t->line = lx->line;
     t->col = lx->col;
 }
@@ -558,11 +583,15 @@ static AstNode *parse_primary(Parser *p) {
         /* namespace call: ns::fn(...) */
         if (p_match(p, TOK_DCOLON)) {
             Token *rhs = p_expect(p, TOK_IDENT, "identifier");
-            char merged[MAX_TEXT];
-            snprintf(merged, sizeof(merged), "%s::%s", name->text, rhs->text);
+            char *merged = join_text2(name->text, "::", rhs->text);
+            if (!merged) {
+                fprintf(stderr, "Out of memory\n");
+                exit(1);
+            }
 
             if (p_match(p, TOK_LPAREN)) {
                 AstNode *call = ast_new(AST_CALL, merged, name->line, name->col);
+                free(merged);
                 if (!p_match(p, TOK_RPAREN)) {
                     ast_add_child(call, parse_expr(p));
                     while (p_match(p, TOK_COMMA)) ast_add_child(call, parse_expr(p));
@@ -570,17 +599,23 @@ static AstNode *parse_primary(Parser *p) {
                 }
                 return call;
             }
-            return ast_new(AST_IDENT, merged, name->line, name->col);
+            AstNode *ident = ast_new(AST_IDENT, merged, name->line, name->col);
+            free(merged);
+            return ident;
         }
 
         /* comma-family name: To,Sub(...) */
         if (p_match(p, TOK_COMMA)) {
             Token *rhs = p_expect(p, TOK_IDENT, "identifier");
-            char merged[MAX_TEXT];
-            snprintf(merged, sizeof(merged), "%s,%s", name->text, rhs->text);
+            char *merged = join_text2(name->text, ",", rhs->text);
+            if (!merged) {
+                fprintf(stderr, "Out of memory\n");
+                exit(1);
+            }
 
             if (p_match(p, TOK_LPAREN)) {
                 AstNode *call = ast_new(AST_CALL, merged, name->line, name->col);
+                free(merged);
                 if (!p_match(p, TOK_RPAREN)) {
                     ast_add_child(call, parse_expr(p));
                     while (p_match(p, TOK_COMMA)) ast_add_child(call, parse_expr(p));
@@ -588,7 +623,9 @@ static AstNode *parse_primary(Parser *p) {
                 }
                 return call;
             }
-            return ast_new(AST_IDENT, merged, name->line, name->col);
+            AstNode *ident = ast_new(AST_IDENT, merged, name->line, name->col);
+            free(merged);
+            return ident;
         }
 
         /* simple call/name */
@@ -760,23 +797,37 @@ static int is_func_decl_start(Parser *p) {
 
 static AstNode *parse_func_decl(Parser *p) {
     Token *first = p_expect(p, TOK_IDENT, "function name");
-    char func_name[MAX_TEXT] = {0};
-    strncpy(func_name, first->text, MAX_TEXT - 1);
+    char *func_name = join_text2(first->text, NULL, NULL);
+    if (!func_name) {
+        fprintf(stderr, "Out of memory\n");
+        exit(1);
+    }
 
     if (p_match(p, TOK_DCOLON)) {
         Token *rhs = p_expect(p, TOK_IDENT, "function name");
-        snprintf(func_name, sizeof(func_name), "%s::%s", first->text, rhs->text);
+        char *tmp = join_text2(first->text, "::", rhs->text);
+        if (!tmp) {
+            free(func_name);
+            fprintf(stderr, "Out of memory\n");
+            exit(1);
+        }
+        free(func_name);
+        func_name = tmp;
     }
 
     AstNode *fn = ast_new(AST_FUNC_DECL, func_name, first->line, first->col);
+    free(func_name);
 
     p_expect(p, TOK_LPAREN, "(");
     if (!p_match(p, TOK_RPAREN)) {
         while (1) {
             Token *param = p_expect(p, TOK_IDENT, "parameter");
 
-            char pname[MAX_TEXT] = {0};
-            strncpy(pname, param->text, MAX_TEXT - 1);
+            char *pname = join_text2(param->text, NULL, NULL);
+            if (!pname) {
+                fprintf(stderr, "Out of memory\n");
+                exit(1);
+            }
 
             /* support lexer behavior where comma can be part of ident */
             size_t n = strlen(pname);
@@ -784,11 +835,13 @@ static AstNode *parse_func_decl(Parser *p) {
                 pname[n - 1] = '\0';
                 AstNode *param_node = ast_new(AST_IDENT, pname, param->line, param->col);
                 ast_add_child(fn, param_node);
+                free(pname);
                 continue; /* comma already consumed as part of token */
             }
 
             AstNode *param_node = ast_new(AST_IDENT, pname, param->line, param->col);
             ast_add_child(fn, param_node);
+            free(pname);
 
             if (!p_match(p, TOK_COMMA)) break;
         }
@@ -856,10 +909,14 @@ static AstNode *parse_stmt(Parser *p) {
             Token *name = p_expect(p, TOK_IDENT, "identifier");
             p_expect(p, TOK_EQ, "=");
 
-            char lhs_name[MAX_TEXT];
-            snprintf(lhs_name, sizeof(lhs_name), "%s::%s", ns->text, name->text);
+            char *lhs_name = join_text2(ns->text, "::", name->text);
+            if (!lhs_name) {
+                fprintf(stderr, "Out of memory\n");
+                exit(1);
+            }
 
             AstNode *assign = ast_new(AST_ASSIGN, lhs_name, ns->line, ns->col);
+            free(lhs_name);
             ast_add_child(assign, parse_expr(p));
             p_expect(p, TOK_SEMI, ";");
             return assign;
@@ -903,11 +960,11 @@ static AstNode *parse_pkg_stmt(Parser *p) {
     if (p_peek(p)->kind == TOK_IDENT && strcmp(p_peek(p)->text, "as") == 0) {
         p_next(p);
         Token *alias = p_expect(p, TOK_IDENT, "alias");
-        strncpy(namespace_alias, alias->text, MAX_TEXT - 1);
+        copy_text(namespace_alias, sizeof(namespace_alias), alias->text);
     }
 
     if (strlen(namespace_alias) > 0) {
-        strncpy(pkg_node->text, namespace_alias, MAX_TEXT - 1);
+        copy_text(pkg_node->text, sizeof(pkg_node->text), namespace_alias);
     }
 
     p_expect(p, TOK_SEMI, ";");
@@ -1277,6 +1334,9 @@ static Value eval_call(AstNode *node, SymTable *table) {
     if (strcmp(name, "get-first") == 0) return builtin_get_first(args, argc, table);
     if (strcmp(name, "get-last") == 0) return builtin_get_last(args, argc, table);
     if (strcmp(name, "get-type") == 0) return builtin_get_type(args, argc, table);
+    if (strcmp(name, "random::rand") == 0) return builtin_random_rand(args, argc, table);
+    if (strcmp(name, "random::rand-int") == 0) return builtin_random_rand_int(args, argc, table);
+    if (strcmp(name, "random::rand-seed") == 0) return builtin_random_rand_seed(args, argc, table);
 
     /* user-defined */
     FunctionDef *fn = find_function(name);
@@ -1368,13 +1428,17 @@ static Value eval_expr_ctx(AstNode *node, SymTable *table, ExecCtx *ctx) {
             if (strcmp(node->text, "+") == 0) {
                 if (l.kind == VAL_STRING || r.kind == VAL_STRING) {
                     const char *ls = val_to_string(&l);
-                    char lbuf[MAX_TEXT]; strncpy(lbuf, ls, MAX_TEXT - 1); lbuf[MAX_TEXT - 1] = '\0';
+                    char lbuf[MAX_TEXT]; copy_text(lbuf, sizeof(lbuf), ls);
                     const char *rs = val_to_string(&r);
-                    char rbuf[MAX_TEXT]; strncpy(rbuf, rs, MAX_TEXT - 1); rbuf[MAX_TEXT - 1] = '\0';
+                    char rbuf[MAX_TEXT]; copy_text(rbuf, sizeof(rbuf), rs);
 
-                    char joined[MAX_TEXT];
-                    snprintf(joined, sizeof(joined), "%s%s", lbuf, rbuf);
-                    out = val_string(joined);
+                    char *joined = join_text2(lbuf, NULL, rbuf);
+                    if (joined) {
+                        out = val_string(joined);
+                        free(joined);
+                    } else {
+                        out = val_nil();
+                    }
                 } else if (l.kind == VAL_FLOAT || r.kind == VAL_FLOAT) {
                     out = val_float(val_to_num(&l) + val_to_num(&r));
                 } else {
@@ -1538,7 +1602,7 @@ static void register_function(AstNode *fn) {
 
     FunctionDef *dst = &g_funcs.items[g_funcs.count++];
     memset(dst, 0, sizeof(*dst));
-    strncpy(dst->name, fn->text, MAX_TEXT - 1);
+    copy_text(dst->name, sizeof(dst->name), fn->text);
 
     int i;
     int body_index = fn->child_count - 1;
@@ -1547,7 +1611,7 @@ static void register_function(AstNode *fn) {
 
     if (dst->param_count > 16) dst->param_count = 16;
     for (i = 0; i < dst->param_count; i++) {
-        strncpy(dst->params[i], fn->children[i]->text, MAX_TEXT - 1);
+        copy_text(dst->params[i], sizeof(dst->params[i]), fn->children[i]->text);
     }
 }
 

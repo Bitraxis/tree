@@ -39,7 +39,7 @@ CMAKE_C_COMPILER_AR:FILEPATH=/usr/bin/gcc-ar-13
 CMAKE_C_COMPILER_RANLIB:FILEPATH=/usr/bin/gcc-ranlib-13
 
 //Flags used by the C compiler during all build types.
-CMAKE_C_FLAGS:STRING=
+CMAKE_C_FLAGS:STRING=-Wall -Wextra -Wformat-truncation
 
 //Flags used by the C compiler during DEBUG builds.
 CMAKE_C_FLAGS_DEBUG:STRING=-g
@@ -222,9 +222,6 @@ CPACK_SOURCE_TZ:BOOL=ON
 //Enable to build ZIP source packages
 CPACK_SOURCE_ZIP:BOOL=OFF
 
-//Build variant used to separate Linux and WSL outputs
-TREE_BUILD_VARIANT:STRING=linux
-
 //Build with pkgtree runtime support
 WITH_PKGTREE:BOOL=ON
 
@@ -383,8 +380,6 @@ CPACK_SOURCE_TXZ-ADVANCED:INTERNAL=1
 CPACK_SOURCE_TZ-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CPACK_SOURCE_ZIP
 CPACK_SOURCE_ZIP-ADVANCED:INTERNAL=1
-//STRINGS property for variable: TREE_BUILD_VARIANT
-TREE_BUILD_VARIANT-STRINGS:INTERNAL=linux;wsl
 //linker supports push/pop state
 _CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED:INTERNAL=TRUE
 
