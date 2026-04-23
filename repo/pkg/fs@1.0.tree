@@ -1,0 +1,12 @@
+# fs@1.0.tree
+fs::workspace(){
+    return ".";
+};
+
+fs::cache-dir(){
+    return ".tree/cache";
+};
+
+fs::packages-dir(){
+    return ".tree/packages";
+};

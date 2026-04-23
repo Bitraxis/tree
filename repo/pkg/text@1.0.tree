@@ -1,0 +1,16 @@
+# text@1.0.tree
+text::upper(s){
+    return to.Upper(s);
+};
+
+text::lower(s){
+    return to.Lower(s);
+};
+
+text::len(s){
+    return to.Length(s);
+};
+
+text::bracket(s){
+    return "[" + to.String(s) + "]";
+};

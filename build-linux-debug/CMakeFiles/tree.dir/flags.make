@@ -6,5 +6,5 @@ C_DEFINES =
 
 C_INCLUDES = -I/mnt/c/Users/Veronika/Downloads/Domco/tree
 
-C_FLAGS = -O3 -DNDEBUG -std=gnu11
+C_FLAGS = -O0 -g3 -Wall -Wextra -g -std=gnu11
 

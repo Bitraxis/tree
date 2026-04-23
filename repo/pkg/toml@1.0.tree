@@ -1,0 +1,4 @@
+# toml@1.0.tree
+toml::parse-text(input){
+    return toml::parse(input);
+};

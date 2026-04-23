@@ -1,0 +1,8 @@
+# json@1.0.tree
+json::parse-text(input){
+    return json::parse(input);
+};
+
+json::to-text(value){
+    return json::stringify(value);
+};

@@ -1,0 +1,8 @@
+# cli@1.0.tree
+cli::arg-count(){
+    return argc;
+};
+
+cli::arg(i){
+    return argv[i];
+};

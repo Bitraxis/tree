@@ -15,5 +15,5 @@ print("random value: ", r);
 ri = random::rand-int(100);
 print("random int [0,100): ", ri);
 
-random::rand-seed(42);
-print("seed set to 42");
+rs = random::rand-seed(42);
+print("seed set to :", rs);

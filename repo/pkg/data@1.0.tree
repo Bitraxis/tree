@@ -1,0 +1,10 @@
+# data@1.0.tree
+data::json-to-toml-info(jsonText, tomlText){
+    j = json::parse(jsonText);
+    t = toml::parse(tomlText);
+    info = {
+        jsonType=get-type(j),
+        tomlType=get-type(t)
+    };
+    return info;
+};

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -63,6 +64,54 @@ static int file_exists(const char *path) {
     return access(path, F_OK) == 0;
 }
 
+static void trim_in_place(char *s) {
+    char *start;
+    char *end;
+    size_t len;
+    if (!s) return;
+    start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (start != s) memmove(s, start, strlen(start) + 1);
+    len = strlen(s);
+    if (len == 0) return;
+    end = s + len - 1;
+    while (end >= s && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+}
+
+static int starts_with(const char *s, const char *prefix) {
+    size_t n;
+    if (!s || !prefix) return 0;
+    n = strlen(prefix);
+    return strncmp(s, prefix, n) == 0;
+}
+
+static int copy_file(const char *src, const char *dst) {
+    FILE *in;
+    FILE *out;
+    char buf[4096];
+    size_t n;
+    in = fopen(src, "rb");
+    if (!in) return -1;
+    out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            fclose(in);
+            fclose(out);
+            return -1;
+        }
+    }
+    fclose(in);
+    fclose(out);
+    return 0;
+}
+
 static int write_file(const char *path, const char *content) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
@@ -94,12 +143,122 @@ static int try_fetch(const char *url, const char *outpath) {
     return -1;
 }
 
+static int repo_is_local(const char *repo) {
+    if (!repo || !*repo) return 0;
+    return strstr(repo, "://") == NULL;
+}
+
+static char *local_repo_manifest_path(void) {
+    return fmt_alloc("%s/MANIFEST.tree", repo_url);
+}
+
+static char *local_repo_package_path(const char *name, const char *version) {
+    return fmt_alloc("%s/pkg/%s@%s.tree", repo_url, name, version);
+}
+
+static int parse_dep_line(char *line, char *name_out, size_t name_cap, char *ver_out, size_t ver_cap) {
+    char *sep;
+    size_t nlen;
+    size_t vlen;
+    if (!line) return 0;
+    trim_in_place(line);
+    if (!*line || line[0] == '#') return 0;
+    if (strchr(line, '=') && !strchr(line, ',')) return 0;
+
+    sep = strchr(line, ',');
+    if (!sep) sep = strchr(line, '@');
+    if (!sep) return 0;
+
+    *sep = '\0';
+    sep++;
+    trim_in_place(line);
+    trim_in_place(sep);
+    if (!*line || !*sep) return 0;
+
+    nlen = strlen(line);
+    if (nlen >= name_cap) nlen = name_cap - 1;
+    memcpy(name_out, line, nlen);
+    name_out[nlen] = '\0';
+
+    vlen = strlen(sep);
+    if (vlen >= ver_cap) vlen = ver_cap - 1;
+    memcpy(ver_out, sep, vlen);
+    ver_out[vlen] = '\0';
+    return 1;
+}
+
+static int load_repo_from_tree_pkg(void) {
+    FILE *f;
+    char line[1024];
+    f = fopen("tree.pkg", "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        trim_in_place(line);
+        if (starts_with(line, "repo=")) {
+            const char *v = line + 5;
+            if (*v) {
+                strncpy(repo_url, v, sizeof(repo_url) - 1);
+                repo_url[sizeof(repo_url) - 1] = '\0';
+            }
+        }
+    }
+    fclose(f);
+    return 1;
+}
+
+static int local_manifest_find(const char *name, const char *version, char *desc_out, size_t desc_cap, char *deps_out, size_t deps_cap) {
+    FILE *f;
+    char line[2048];
+    char *manifest = local_repo_manifest_path();
+    int found = 0;
+    if (!manifest) return 0;
+    f = fopen(manifest, "r");
+    free(manifest);
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        char *name_f;
+        char *ver_f;
+        char *desc_f;
+        char *deps_f;
+        trim_in_place(line);
+        if (!*line || line[0] == '#') continue;
+
+        name_f = strtok(line, "\t");
+        ver_f = strtok(NULL, "\t");
+        desc_f = strtok(NULL, "\t");
+        deps_f = strtok(NULL, "\t");
+        if (!name_f || !ver_f) continue;
+        trim_in_place(name_f);
+        trim_in_place(ver_f);
+        if (strcmp(name_f, name) != 0 || strcmp(ver_f, version) != 0) continue;
+
+        if (desc_out && desc_cap > 0) {
+            if (!desc_f) desc_f = "";
+            trim_in_place(desc_f);
+            strncpy(desc_out, desc_f, desc_cap - 1);
+            desc_out[desc_cap - 1] = '\0';
+        }
+        if (deps_out && deps_cap > 0) {
+            if (!deps_f) deps_f = "";
+            trim_in_place(deps_f);
+            strncpy(deps_out, deps_f, deps_cap - 1);
+            deps_out[deps_cap - 1] = '\0';
+        }
+        found = 1;
+        break;
+    }
+
+    fclose(f);
+    return found;
+}
+
 int pkgtree_init(void) {
     mkdir_p(".tree");
     mkdir_p(".tree/cache");
     mkdir_p(".tree/packages");
     if (!file_exists("tree.pkg")) {
-        char *buf = fmt_alloc("repo=\"%s\"\n", repo_url);
+        char *buf = fmt_alloc("# tree.pkg v2\nrepo=%s\nformat=2\n", repo_url);
         if (buf) {
             write_file("tree.pkg", buf);
             free(buf);
@@ -139,10 +298,13 @@ int pkgtree_list(void) {
     if (!f) { printf("[pkgtree] no tree.pkg found\n"); return 0; }
     char buf[1024];
     int count = 0;
+    load_repo_from_tree_pkg();
+    printf("[pkgtree] repo: %s\n", repo_url);
     while (fgets(buf, sizeof(buf), f)) {
-        char *p = strchr(buf, '\n'); if (p) *p = '\0';
-        if (strlen(buf) == 0) continue;
-        printf(" - %s\n", buf);
+        char name[512];
+        char ver[512];
+        if (!parse_dep_line(buf, name, sizeof(name), ver, sizeof(ver))) continue;
+        printf(" - %s@%s\n", name, ver);
         count++;
     }
     fclose(f);
@@ -151,45 +313,75 @@ int pkgtree_list(void) {
 }
 
 int pkgtree_install(void) {
+    int installed_count = 0;
     mkdir_p(".tree");
     mkdir_p(".tree/cache");
     mkdir_p(".tree/packages");
     if (!file_exists("tree.pkg")) { fprintf(stderr, "[pkgtree][err] no tree.pkg found\n"); return 0; }
+    load_repo_from_tree_pkg();
+
     FILE *f = fopen("tree.pkg","r");
     if (!f) return 0;
     char line[1024];
     while (fgets(line, sizeof(line), f)) {
-        char tmp[1024];
-        strncpy(tmp, line, sizeof(tmp)-1);
-        tmp[sizeof(tmp)-1] = '\0';
-        char *nl = strchr(tmp, '\n'); if (nl) *nl = '\0';
-        if (strlen(tmp) == 0) continue;
-        char *comma = strchr(tmp, ',');
-        if (!comma) continue;
-        *comma = '\0';
-        char *name = tmp;
-        char *ver = comma + 1;
-        char *pkgdir = fmt_alloc(".tree/packages/%s/%s", name, ver);
-        char *url = fmt_alloc("%s/%s/%s/package.tree", repo_url, name, ver);
-        char *outpath = fmt_alloc(".tree/cache/%s-%s.tree", name, ver);
-        if (pkgdir && url && outpath) {
+        char name[512];
+        char ver[512];
+        char *pkgdir = NULL;
+        char *url = NULL;
+        char *srcpath = NULL;
+        char *outpath = NULL;
+        char desc[1024] = {0};
+        char deps[1024] = {0};
+
+        if (!parse_dep_line(line, name, sizeof(name), ver, sizeof(ver))) continue;
+        pkgdir = fmt_alloc(".tree/packages/%s/%s", name, ver);
+        outpath = fmt_alloc(".tree/packages/%s/%s/%s@%s.tree", name, ver, name, ver);
+
+        if (pkgdir && outpath) {
             mkdir_p(pkgdir);
-            if (try_fetch(url, outpath) == 0) {
-                printf("[pkgtree] fetched %s@%s -> %s\n", name, ver, outpath);
+
+            if (repo_is_local(repo_url)) {
+                srcpath = local_repo_package_path(name, ver);
+                if (!local_manifest_find(name, ver, desc, sizeof(desc), deps, sizeof(deps))) {
+                    fprintf(stderr, "[pkgtree][err] %s@%s not listed in %s/MANIFEST.tree\n", name, ver, repo_url);
+                } else if (!srcpath || !file_exists(srcpath)) {
+                    fprintf(stderr, "[pkgtree][err] local package missing: %s\n", srcpath ? srcpath : "(null)");
+                } else if (copy_file(srcpath, outpath) != 0) {
+                    fprintf(stderr, "[pkgtree][err] failed to copy %s -> %s\n", srcpath, outpath);
+                } else {
+                    printf("[pkgtree] installed %s@%s -> %s\n", name, ver, outpath);
+                    if (desc[0]) printf("[pkgtree]   desc: %s\n", desc);
+                    if (deps[0]) printf("[pkgtree]   deps: %s\n", deps);
+                    installed_count++;
+                }
             } else {
-                printf("[pkgtree] failed to fetch %s@%s\n", name, ver);
+                url = fmt_alloc("%s/%s/%s/package.tree", repo_url, name, ver);
+                if (url && try_fetch(url, outpath) == 0) {
+                    printf("[pkgtree] fetched %s@%s -> %s\n", name, ver, outpath);
+                    installed_count++;
+                } else {
+                    printf("[pkgtree] failed to fetch %s@%s\n", name, ver);
+                }
             }
         } else {
-            printf("[pkgtree] failed to fetch %s@%s\n", name, ver);
+            printf("[pkgtree] failed to install %s@%s\n", name, ver);
         }
         free(pkgdir);
         free(url);
+        free(srcpath);
         free(outpath);
     }
     fclose(f);
-    write_file("tree.lock", "{locked=\"ok\"}\n");
-    printf("[pkgtree][ok] install complete\n");
-    return 1;
+
+    {
+        char *lock = fmt_alloc("{locked=\"ok\", installed=%d}\n", installed_count);
+        if (lock) {
+            write_file("tree.lock", lock);
+            free(lock);
+        }
+    }
+    printf("[pkgtree][ok] install complete (%d package(s))\n", installed_count);
+    return installed_count > 0;
 }
 
 int pkgtree_update(const char* name) {
@@ -224,36 +416,48 @@ int pkgtree_update(const char* name) {
 }
 
 int pkgtree_pkg_search(const char* pkg_name, const char* alias) {
+    int found = 0;
     if (!pkg_name) return 0;
-    const char *libdir = "/usr/lib";
-    DIR *d = opendir(libdir);
-    if (!d) {
-        fprintf(stderr, "[pkgtree][err] cannot open %s\n", libdir);
+    load_repo_from_tree_pkg();
+
+    if (!repo_is_local(repo_url)) {
+        printf("[pkgtree] search currently supports local repo only (repo=%s)\n", repo_url);
         return 0;
     }
-    struct dirent *entry;
-    int found = 0;
-    while ((entry = readdir(d)) != NULL) {
-        if (strncmp(entry->d_name, "pks", 3) == 0) {
-            char *candidate = fmt_alloc("%s/%s/%s.tree", libdir, entry->d_name, pkg_name);
-            if (!candidate) continue;
-            if (access(candidate, R_OK) == 0) {
-                printf("[pkgtree] found package file: %s (as %s)\n", candidate, alias?alias:pkg_name);
-                found++;
-            } else {
-                char *dir_candidate = fmt_alloc("%s/%s/%s", libdir, entry->d_name, pkg_name);
-                free(candidate);
-                candidate = dir_candidate;
-                if (!candidate) continue;
-                if (access(candidate, R_OK) == 0) {
-                    printf("[pkgtree] found package dir: %s (as %s)\n", candidate, alias?alias:pkg_name);
-                    found++;
-                }
-            }
-            free(candidate);
+
+    {
+        FILE *f;
+        char line[2048];
+        char *manifest = local_repo_manifest_path();
+        if (!manifest) return 0;
+        f = fopen(manifest, "r");
+        free(manifest);
+        if (!f) {
+            fprintf(stderr, "[pkgtree][err] no local manifest found under %s\n", repo_url);
+            return 0;
         }
+
+        while (fgets(line, sizeof(line), f)) {
+            char *name_f;
+            char *ver_f;
+            char *desc_f;
+            trim_in_place(line);
+            if (!*line || line[0] == '#') continue;
+            name_f = strtok(line, "\t");
+            ver_f = strtok(NULL, "\t");
+            desc_f = strtok(NULL, "\t");
+            if (!name_f || !ver_f) continue;
+            trim_in_place(name_f);
+            trim_in_place(ver_f);
+            if (strcmp(name_f, pkg_name) != 0) continue;
+            if (desc_f) trim_in_place(desc_f);
+            printf("[pkgtree] found %s@%s as %s\n", name_f, ver_f, alias ? alias : pkg_name);
+            if (desc_f && *desc_f) printf("[pkgtree]   desc: %s\n", desc_f);
+            found++;
+        }
+        fclose(f);
     }
-    closedir(d);
-    if (found == 0) fprintf(stderr, "[pkgtree] package %s not found in /usr/lib/pks*\n", pkg_name);
+
+    if (found == 0) fprintf(stderr, "[pkgtree] package %s not found in %s/MANIFEST.tree\n", pkg_name, repo_url);
     return found;
 }

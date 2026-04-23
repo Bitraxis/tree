@@ -10,7 +10,7 @@
 #define PKGTREE_WEAK
 #endif
 
-#define PKGTREE_DEFAULT_REPO "https://example.treepkgs.dev"
+#define PKGTREE_DEFAULT_REPO "repo"
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,0 +1,16 @@
+# build@1.0.tree
+build::profile-debug(){
+    return {
+        name="debug",
+        optimize="-O0",
+        symbols=1
+    };
+};
+
+build::profile-release(){
+    return {
+        name="release",
+        optimize="-O2",
+        symbols=0
+    };
+};

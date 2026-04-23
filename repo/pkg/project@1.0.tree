@@ -1,0 +1,9 @@
+# project@1.0.tree
+project::bootstrap(name){
+    meta = {
+        name=to.String(name),
+        version="0.1.0",
+        runtime="tree"
+    };
+    return meta;
+};

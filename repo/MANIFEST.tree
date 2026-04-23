@@ -1,0 +1,14 @@
+# MANIFEST.tree v2
+# Columns are tab-separated:
+# name<TAB>version<TAB>description<TAB>dependencies (; separated package@version)
+core	1.0	Core helpers for numbers and random values	
+text	1.0	String utilities and formatting helpers	core@1.0
+json	1.0	JSON parse/stringify helper wrapper	text@1.0
+toml	1.0	TOML parser helper wrapper	text@1.0
+fs	1.0	File-system metadata helpers for project scripts	core@1.0
+cli	1.0	CLI argument helpers for Tree entry scripts	core@1.0
+data	1.0	Data glue package that combines JSON and TOML	json@1.0;toml@1.0
+project	1.0	Project scaffolding metadata helpers	fs@1.0;cli@1.0
+net	1.0	Simple network endpoint config helpers	text@1.0
+mathx	1.0	Extended math constants and tiny helpers	core@1.0
+build	1.0	Build profile metadata and command snippets	project@1.0;cli@1.0

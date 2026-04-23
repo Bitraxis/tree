@@ -1,0 +1,19 @@
+# core@1.0.tree
+pkg(){
+    "math";
+    "random";
+};
+
+core::pi(){
+    return 3.14159265;
+};
+
+core::rand-unit(){
+    return random::rand();
+};
+
+core::clamp-int(v, minv, maxv){
+    if (v < minv) { return minv; };
+    if (v > maxv) { return maxv; };
+    return v;
+};

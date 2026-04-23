@@ -1,0 +1,12 @@
+# mathx@1.0.tree
+pkg(){
+    "math";
+};
+
+mathx::tau(){
+    return 6.28318530;
+};
+
+mathx::deg-to-rad(d){
+    return math::pow(180.0, -1.0) * to_float(d) * 3.14159265;
+};

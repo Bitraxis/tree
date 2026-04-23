@@ -1,2 +1,8 @@
+# tree.pkg v2
+repo=repo
+format=2
 core,1.0
 json,1.0
+toml,1.0
+cli,1.0
+project,1.0

@@ -1,0 +1,8 @@
+# net@1.0.tree
+net::endpoint(host, port){
+    return {
+        host=to.String(host),
+        port=To,Int(port),
+        url="http://" + to.String(host) + ":" + to.String(port)
+    };
+};

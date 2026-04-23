@@ -189,6 +189,60 @@ static Value val_dict(void) {
     return v;
 }
 
+static char *dup_cstr(const char *s) {
+    size_t n;
+    char *out;
+    if (!s) s = "";
+    n = strlen(s);
+    out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return out;
+}
+
+static Value val_clone(const Value *src) {
+    int i;
+    Value out;
+    if (!src) return val_nil();
+
+    switch (src->kind) {
+        case VAL_NIL:
+            return val_nil();
+        case VAL_INT:
+            return val_int(src->data.int_val);
+        case VAL_FLOAT:
+            return val_float(src->data.float_val);
+        case VAL_STRING:
+            return val_string(src->data.str_val ? src->data.str_val : "");
+        case VAL_LIST:
+            out = val_list();
+            for (i = 0; i < src->data.list_val.count && i < MAX_ARRAY_ITEMS; i++) {
+                Value *item = (Value *)malloc(sizeof(Value));
+                if (!item) break;
+                *item = val_clone(src->data.list_val.items[i]);
+                out.data.list_val.items[out.data.list_val.count++] = item;
+            }
+            return out;
+        case VAL_DICT:
+            out = val_dict();
+            for (i = 0; i < src->data.dict_val.count && i < MAX_ARRAY_ITEMS; i++) {
+                out.data.dict_val.keys[out.data.dict_val.count] = dup_cstr(src->data.dict_val.keys[i] ? src->data.dict_val.keys[i] : "");
+                if (!out.data.dict_val.keys[out.data.dict_val.count]) break;
+                out.data.dict_val.values[out.data.dict_val.count] = (Value *)malloc(sizeof(Value));
+                if (!out.data.dict_val.values[out.data.dict_val.count]) {
+                    free(out.data.dict_val.keys[out.data.dict_val.count]);
+                    break;
+                }
+                *out.data.dict_val.values[out.data.dict_val.count] = val_clone(src->data.dict_val.values[i]);
+                out.data.dict_val.count++;
+            }
+            return out;
+    }
+
+    return val_nil();
+}
+
 static void val_free(Value *v) {
     if (!v) return;
     if (v->kind == VAL_STRING && v->data.str_val) free(v->data.str_val);
@@ -270,6 +324,30 @@ static void sym_set(SymTable *table, const char *name, Value val) {
     }
 }
 
+static SymTable *sym_clone(const SymTable *src) {
+    int i;
+    SymTable *dst;
+    if (!src) return NULL;
+    dst = (SymTable *)calloc(1, sizeof(SymTable));
+    if (!dst) return NULL;
+    dst->count = src->count;
+    if (dst->count > MAX_VARS) dst->count = MAX_VARS;
+    for (i = 0; i < dst->count; i++) {
+        copy_text(dst->items[i].name, sizeof(dst->items[i].name), src->items[i].name);
+        dst->items[i].val = val_clone(&src->items[i].val);
+    }
+    return dst;
+}
+
+static void sym_destroy(SymTable *table) {
+    int i;
+    if (!table) return;
+    for (i = 0; i < table->count; i++) {
+        val_free(&table->items[i].val);
+    }
+    free(table);
+}
+
 typedef struct {
     char name[MAX_TEXT];
     char params[16][MAX_TEXT];
@@ -288,6 +366,8 @@ typedef struct {
 } ExecCtx;
 
 static FunctionTable g_funcs = {0};
+static int g_cli_argc = 0;
+static char **g_cli_argv = NULL;
 
 
 typedef struct {
@@ -1229,6 +1309,39 @@ static Value builtin_to_lower(AstNode **args, int argc, SymTable *table) {
     return val_string(buf);
 }
 
+static Value builtin_str_eq(AstNode **args, int argc, SymTable *table) {
+    Value a;
+    Value b;
+    char a_buf[MAX_TEXT];
+    char b_buf[MAX_TEXT];
+    const char *a_s;
+    const char *b_s;
+
+    if (argc != 2) { fprintf(stderr, "str-eq expects 2 arguments\n"); return val_nil(); }
+
+    a = eval_expr(args[0], table);
+    b = eval_expr(args[1], table);
+
+    if (a.kind == VAL_STRING && a.data.str_val) a_s = a.data.str_val;
+    else {
+        copy_text(a_buf, sizeof(a_buf), val_to_string(&a));
+        a_s = a_buf;
+    }
+
+    if (b.kind == VAL_STRING && b.data.str_val) b_s = b.data.str_val;
+    else {
+        copy_text(b_buf, sizeof(b_buf), val_to_string(&b));
+        b_s = b_buf;
+    }
+
+    {
+        Value out = val_int(strcmp(a_s, b_s) == 0 ? 1 : 0);
+        val_free(&a);
+        val_free(&b);
+        return out;
+    }
+}
+
 /* ============ List Operations (Kebab Family) ============ */
 
 static Value builtin_get_length(AstNode **args, int argc, SymTable *table) {
@@ -1245,7 +1358,7 @@ static Value builtin_get_first(AstNode **args, int argc, SymTable *table) {
     if (argc != 1) { fprintf(stderr, "get-first expects 1 argument\n"); return val_nil(); }
     Value v = eval_expr(args[0], table);
     if (v.kind != VAL_LIST || v.data.list_val.count == 0) return val_nil();
-    Value result = *v.data.list_val.items[0];
+    Value result = val_clone(v.data.list_val.items[0]);
     val_free(&v);
     return result;
 }
@@ -1254,7 +1367,7 @@ static Value builtin_get_last(AstNode **args, int argc, SymTable *table) {
     if (argc != 1) { fprintf(stderr, "get-last expects 1 argument\n"); return val_nil(); }
     Value v = eval_expr(args[0], table);
     if (v.kind != VAL_LIST || v.data.list_val.count == 0) return val_nil();
-    Value result = *v.data.list_val.items[v.data.list_val.count - 1];
+    Value result = val_clone(v.data.list_val.items[v.data.list_val.count - 1]);
     val_free(&v);
     return result;
 }
@@ -1275,9 +1388,29 @@ static Value builtin_get_type(AstNode **args, int argc, SymTable *table) {
     return val_string(type);
 }
 
+static Value builtin_arg_count(AstNode **args, int argc, SymTable *table) {
+    (void)args;
+    (void)table;
+    if (argc != 0) { fprintf(stderr, "arg-count expects 0 arguments\n"); return val_nil(); }
+    return val_int(g_cli_argc);
+}
+
+static Value builtin_arg_get(AstNode **args, int argc, SymTable *table) {
+    Value idx_v;
+    long idx;
+    if (argc != 1) { fprintf(stderr, "arg-get expects 1 argument\n"); return val_nil(); }
+    idx_v = eval_expr(args[0], table);
+    idx = (idx_v.kind == VAL_INT) ? idx_v.data.int_val : (long)val_to_num(&idx_v);
+    val_free(&idx_v);
+    if (idx < 0 || idx >= g_cli_argc || !g_cli_argv) return val_nil();
+    return val_string(g_cli_argv[idx]);
+}
+
 /* ============ Random Package Functions ============ */
 
 static Value builtin_random_rand(AstNode **args, int argc, SymTable *table) {
+    (void)args;
+    (void)table;
     if (argc != 0) { fprintf(stderr, "random::rand expects 0 arguments\n"); return val_nil(); }
     return val_float((double)rand() / RAND_MAX);
 }
@@ -1298,6 +1431,12 @@ static Value builtin_random_rand_seed(AstNode **args, int argc, SymTable *table)
     val_free(&v);
     srand(seed);
     return val_nil();
+}
+
+static const char *value_to_cstr(Value *v, char *buf, size_t buf_size) {
+    if (v->kind == VAL_STRING && v->data.str_val) return v->data.str_val;
+    copy_text(buf, buf_size, val_to_string(v));
+    return buf;
 }
 
 static Value eval_call(AstNode *node, SymTable *table) {
@@ -1330,33 +1469,94 @@ static Value eval_call(AstNode *node, SymTable *table) {
     if (strcmp(name, "to.Length") == 0) return builtin_to_length(args, argc, table);
     if (strcmp(name, "to.Upper") == 0) return builtin_to_upper(args, argc, table);
     if (strcmp(name, "to.Lower") == 0) return builtin_to_lower(args, argc, table);
+    if (strcmp(name, "str-eq") == 0) return builtin_str_eq(args, argc, table);
     if (strcmp(name, "get-length") == 0) return builtin_get_length(args, argc, table);
     if (strcmp(name, "get-first") == 0) return builtin_get_first(args, argc, table);
     if (strcmp(name, "get-last") == 0) return builtin_get_last(args, argc, table);
     if (strcmp(name, "get-type") == 0) return builtin_get_type(args, argc, table);
+    if (strcmp(name, "arg-count") == 0) return builtin_arg_count(args, argc, table);
+    if (strcmp(name, "arg-get") == 0) return builtin_arg_get(args, argc, table);
     if (strcmp(name, "random::rand") == 0) return builtin_random_rand(args, argc, table);
     if (strcmp(name, "random::rand-int") == 0) return builtin_random_rand_int(args, argc, table);
     if (strcmp(name, "random::rand-seed") == 0) return builtin_random_rand_seed(args, argc, table);
 
+    if (strcmp(name, "pkgtree::init") == 0) {
+        if (argc != 0) { fprintf(stderr, "pkgtree::init expects 0 arguments\n"); return val_nil(); }
+        pkgtree_init();
+        return val_nil();
+    }
+    if (strcmp(name, "pkgtree::set-repo") == 0) {
+        Value v;
+        char tmp[MAX_TEXT];
+        if (argc != 1) { fprintf(stderr, "pkgtree::set-repo expects 1 argument\n"); return val_nil(); }
+        v = eval_expr(args[0], table);
+        pkgtree_set_repo(value_to_cstr(&v, tmp, sizeof(tmp)));
+        val_free(&v);
+        return val_nil();
+    }
+    if (strcmp(name, "pkgtree::add") == 0) {
+        Value name_v;
+        Value ver_v;
+        char name_buf[MAX_TEXT];
+        char ver_buf[MAX_TEXT];
+        if (argc != 2) { fprintf(stderr, "pkgtree::add expects 2 arguments\n"); return val_nil(); }
+        name_v = eval_expr(args[0], table);
+        ver_v = eval_expr(args[1], table);
+        pkgtree_add(value_to_cstr(&name_v, name_buf, sizeof(name_buf)), value_to_cstr(&ver_v, ver_buf, sizeof(ver_buf)));
+        val_free(&name_v);
+        val_free(&ver_v);
+        return val_nil();
+    }
+    if (strcmp(name, "pkgtree::install") == 0) {
+        if (argc != 0) { fprintf(stderr, "pkgtree::install expects 0 arguments\n"); return val_nil(); }
+        pkgtree_install();
+        return val_nil();
+    }
+    if (strcmp(name, "pkgtree::update") == 0) {
+        Value name_v;
+        char name_buf[MAX_TEXT];
+        if (argc != 1) { fprintf(stderr, "pkgtree::update expects 1 argument\n"); return val_nil(); }
+        name_v = eval_expr(args[0], table);
+        pkgtree_update(value_to_cstr(&name_v, name_buf, sizeof(name_buf)));
+        val_free(&name_v);
+        return val_nil();
+    }
+    if (strcmp(name, "pkgtree::list") == 0) {
+        if (argc != 0) { fprintf(stderr, "pkgtree::list expects 0 arguments\n"); return val_nil(); }
+        pkgtree_list();
+        return val_nil();
+    }
+
     /* user-defined */
     FunctionDef *fn = find_function(name);
     if (fn) {
+        SymTable *local;
         if (argc != fn->param_count) {
             fprintf(stderr, "%s expects %d args, got %d\n", name, fn->param_count, argc);
             return val_nil();
         }
 
-        SymTable local = *table;
+        local = sym_clone(table);
+        if (!local) {
+            fprintf(stderr, "Out of memory while creating function scope\n");
+            return val_nil();
+        }
+
         for (i = 0; i < fn->param_count; i++) {
             Value v = eval_expr(args[i], table);
-            sym_set(&local, fn->params[i], v);
+            sym_set(local, fn->params[i], v);
         }
 
         ExecCtx ctx = {0};
         ctx.return_value = val_nil();
-        eval_stmt_ctx(fn->body, &local, &ctx);
+        eval_stmt_ctx(fn->body, local, &ctx);
 
-        if (ctx.has_return) return ctx.return_value;
+        if (ctx.has_return) {
+            Value out = ctx.return_value;
+            sym_destroy(local);
+            return out;
+        }
+        sym_destroy(local);
         return val_nil();
     }
 
@@ -1492,7 +1692,7 @@ static Value eval_expr_ctx(AstNode *node, SymTable *table, ExecCtx *ctx) {
 
         case AST_IDENT: {
             Value *v = sym_get(table, node->text);
-            if (v) return *v;
+            if (v) return val_clone(v);
             fprintf(stderr, "Undefined variable: %s\n", node->text);
             return val_nil();
         }
@@ -1679,6 +1879,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <filename.tree>\n", argv[0]);
         return 1;
     }
+
+    g_cli_argc = (argc > 2) ? (argc - 2) : 0;
+    g_cli_argv = (argc > 2) ? &argv[2] : NULL;
 
     file_buf = read_file(argv[1]);
     source = file_buf;

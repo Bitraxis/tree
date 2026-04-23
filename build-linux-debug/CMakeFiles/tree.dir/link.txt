@@ -1,0 +1,1 @@
+/usr/bin/cc -O0 -g3 -Wall -Wextra -g CMakeFiles/tree.dir/main.c.o CMakeFiles/tree.dir/pkgtree_runtime.c.o -o tree  -lm 
