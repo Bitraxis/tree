@@ -1,5 +1,5 @@
 CMAKE ?= cmake
-REPO_DIR := /mnt/c/Users/Veronika/Downloads/Domco/tree
+REPO_DIR := 
 
 .PHONY: all clean linux wsl package
 
