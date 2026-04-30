@@ -1,19 +1,18 @@
 pkg(){
-    "math";
     "random";
 };
 
-x = math::sqrt(16.0);
+x = to_sqrt(16.0);
 print("sqrt(16) = ", x);
 
-y = math::pow(2.0, 3.0);
+y = to_pow(2.0, 3.0);
 print("2^3 = ", y);
 
 r = random::rand();
 print("random value: ", r);
 
 ri = random::rand-int(100);
-print("random int [0,100): ", ri);
+print("random int [0,100]: ", ri);
 
-rs = random::rand-seed(42);
+rs = random::rand-seed(1);
 print("seed set to :", rs);
